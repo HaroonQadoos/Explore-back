@@ -27,7 +27,10 @@ const connectDB = async () => {
 connectDB();
 app.use(
   cors({
-    origin: ["http://localhost:5173", "http://localhost:5174"], // frontend origin
+    origin: [
+      "https://explore-front-aznp.vercel.app",
+      "https://explore-dash-l8vr.vercel.app",
+    ], // frontend origin
     credentials: true, // allow cookies
   })
 );
