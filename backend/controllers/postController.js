@@ -1,4 +1,3 @@
-const { default: api } = require("../../frontend/src/api/axios");
 const Post = require("../models/post");
 const mongoose = require("mongoose");
 
