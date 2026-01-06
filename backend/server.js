@@ -9,11 +9,20 @@ const postRoutes = require("./routes/postRoutes");
 const authRoutes = require("./routes/authRoutes");
 const adminRoutes = require("./routes/adminRoutes");
 const uploadRoutes = require("./routes/uploadRoutes");
-
-dotenv.config();
-connectDB();
-
 const app = express();
+dotenv.config();
+let isConnected = false;
+const connectDB = async () => {
+  if (isConnected) return;
+  try {
+    await mongoose.connect(process.env.DB);
+    isConnected = true;
+    console.log("MongoDB connected");
+  } catch (error) {
+    console.error(" MongoDB connection error:", error);
+    process.exit(1);
+  }
+};
 
 app.use(
   cors({
@@ -21,6 +30,12 @@ app.use(
     credentials: true, // allow cookies
   })
 );
+app.use((req, res, next) => {
+  if (!isConnected) {
+    connectDB();
+  }
+  next();
+});
 app.use(express.json());
 app.use(cookieParser());
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
