@@ -1,93 +1,50 @@
 const Post = require("../models/post");
 const mongoose = require("mongoose");
+const cloudinary = require("../config/cloudinary");
+const streamifier = require("streamifier");
 
+// Helper
 const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
 
-/* =======================
-   VISITOR
-======================= */
-
-const getPosts = async (req, res) => {
-  try {
-    const posts = await Post.find({ status: "published" })
-      .populate("author", "username email")
-      .sort({ createdAt: -1 });
-
-    res.json(posts);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Error loading posts" });
-  }
-};
-
-const getPostById = async (req, res) => {
-  const { id } = req.params;
-  if (!id) return res.status(400).json({ message: "Post ID is required" });
-  if (!isValidId(id))
-    return res.status(400).json({ message: "Invalid post ID" });
-
-  try {
-    const post = await Post.findOne({ _id: id, status: "published" }).populate(
-      "author",
-      "username _id"
+// Cloudinary upload helper
+const uploadBufferToCloudinary = (buffer) => {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { folder: "blog-posts" },
+      (err, result) => {
+        if (err) reject(err);
+        else resolve(result);
+      }
     );
-
-    if (!post) return res.status(404).json({ message: "Post not found" });
-
-    res.json(post);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Error fetching post" });
-  }
+    streamifier.createReadStream(buffer).pipe(stream);
+  });
 };
 
 /* =======================
-   USER
+   CREATE POST
 ======================= */
-
-const getMyPosts = async (req, res) => {
-  try {
-    if (!req.user)
-      return res.status(401).json({ message: "Not authenticated" });
-
-    const posts = await Post.find({ author: req.user._id })
-      .populate("author", "username")
-      .sort({
-        createdAt: -1,
-      });
-
-    const postsWithFullUrl = posts.map((post) => ({
-      ...post._doc,
-      image: post.image
-        ? post.image.startsWith("http")
-          ? post.image
-          : `http://localhost:4000${post.image}`
-        : "",
-    }));
-
-    res.json(postsWithFullUrl);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Error loading your posts" });
-  }
-};
-
 const createPost = async (req, res) => {
   try {
     const { title, body, htmlBody, status, tags } = req.body;
+
     if (!req.user)
       return res.status(401).json({ message: "Not authenticated" });
-
-    // strict field validation
-    if (!title || !title.trim())
+    if (!title?.trim())
       return res.status(400).json({ message: "Title is required" });
-
-    if (!body || !body.trim())
+    if (!body?.trim())
       return res.status(400).json({ message: "Body is required" });
 
-    const image = req.file
-      ? `/uploads/${req.file.filename}`
-      : req.body.imageUrl || "";
+    let image = null;
+
+    // 1️⃣ If user uploaded a file
+    if (req.file) {
+      const result = await uploadBufferToCloudinary(req.file.buffer);
+      image = result.secure_url;
+    }
+    // 2️⃣ If user provided external URL
+    else if (req.body.fileUrl) {
+      image = req.body.fileUrl;
+    }
 
     const validStatus = ["draft", "published"];
     const postStatus = validStatus.includes(status) ? status : "draft";
@@ -99,24 +56,29 @@ const createPost = async (req, res) => {
       author: req.user._id,
       image,
       status: postStatus,
-      tags: Array.isArray(tags) ? tags : [],
+      tags: Array.isArray(tags)
+        ? tags
+        : typeof tags === "string"
+        ? tags.split(",").map((t) => t.trim())
+        : [],
     });
 
     res.status(201).json(post);
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ message: "Error creating post" });
+  } catch (err) {
+    console.error("CREATE POST ERROR:", err);
+    res
+      .status(500)
+      .json({ message: "Error creating post", error: err.message });
   }
 };
 
+/* =======================
+   UPDATE POST
+======================= */
 const updatePost = async (req, res) => {
   const { id } = req.params;
-  if (!id) return res.status(400).json({ message: "Post ID is required" });
-  if (!isValidId(id))
+  if (!id || !isValidId(id))
     return res.status(400).json({ message: "Invalid post ID" });
-
-  if (!req.body)
-    return res.status(400).json({ message: "Request body is required" });
 
   try {
     const post = await Post.findById(id);
@@ -128,34 +90,92 @@ const updatePost = async (req, res) => {
     )
       return res.status(403).json({ message: "Not authorized" });
 
-    const { title, body, image, tags, status } = req.body;
+    const { title, body, tags, status } = req.body;
 
-    if (title !== undefined && !title.trim())
-      return res.status(400).json({ message: "Title cannot be empty" });
-
-    if (body !== undefined && !body.trim())
-      return res.status(400).json({ message: "Body cannot be empty" });
+    // Update image if new file uploaded
+    let image = post.image;
+    if (req.file) {
+      const result = await uploadBufferToCloudinary(req.file.buffer);
+      image = result.secure_url;
+    } else if (req.body.fileUrl) {
+      image = req.body.fileUrl;
+    }
 
     post.title = title ?? post.title;
     post.body = body ?? post.body;
-    post.image = image ?? post.image;
-    post.tags = Array.isArray(tags) ? tags : post.tags;
+    post.image = image;
+    post.tags = Array.isArray(tags)
+      ? tags
+      : typeof tags === "string"
+      ? tags.split(",").map((t) => t.trim())
+      : post.tags;
 
     const validStatus = ["draft", "published"];
     if (status && validStatus.includes(status)) post.status = status;
 
     const updatedPost = await post.save();
     res.status(200).json(updatedPost);
-  } catch (error) {
-    console.error("UPDATE ERROR:", error);
-    res.status(500).json({ message: "Error updating post" });
+  } catch (err) {
+    console.error("UPDATE POST ERROR:", err);
+    res
+      .status(500)
+      .json({ message: "Error updating post", error: err.message });
   }
 };
 
+/* =======================
+   GET POSTS
+======================= */
+const getPosts = async (req, res) => {
+  try {
+    const posts = await Post.find({ status: "published" })
+      .populate("author", "username email")
+      .sort({ createdAt: -1 });
+    res.json(posts);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Error fetching posts" });
+  }
+};
+
+const getPostById = async (req, res) => {
+  const { id } = req.params;
+  if (!id || !isValidId(id))
+    return res.status(400).json({ message: "Invalid post ID" });
+
+  try {
+    const post = await Post.findOne({ _id: id, status: "published" }).populate(
+      "author",
+      "username _id"
+    );
+    if (!post) return res.status(404).json({ message: "Post not found" });
+    res.json(post);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Error fetching post" });
+  }
+};
+
+const getMyPosts = async (req, res) => {
+  try {
+    if (!req.user)
+      return res.status(401).json({ message: "Not authenticated" });
+    const posts = await Post.find({ author: req.user._id })
+      .populate("author", "username")
+      .sort({ createdAt: -1 });
+    res.json(posts);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Error loading your posts" });
+  }
+};
+
+/* =======================
+   DELETE POST
+======================= */
 const deletePost = async (req, res) => {
   const { id } = req.params;
-  if (!id) return res.status(400).json({ message: "Post ID is required" });
-  if (!isValidId(id))
+  if (!id || !isValidId(id))
     return res.status(400).json({ message: "Invalid post ID" });
 
   try {
@@ -170,20 +190,18 @@ const deletePost = async (req, res) => {
 
     await post.deleteOne();
     res.json({ message: "Post deleted successfully" });
-  } catch (error) {
-    console.error(error);
+  } catch (err) {
+    console.error(err);
     res.status(500).json({ message: "Error deleting post" });
   }
 };
 
 /* =======================
-   ADMIN
+   TOGGLE PUBLISH (ADMIN)
 ======================= */
-
 const togglePublishPosts = async (req, res) => {
   const { id } = req.params;
-  if (!id) return res.status(400).json({ message: "Post ID is required" });
-  if (!isValidId(id))
+  if (!id || !isValidId(id))
     return res.status(400).json({ message: "Invalid post ID" });
 
   try {
@@ -194,18 +212,18 @@ const togglePublishPosts = async (req, res) => {
     await post.save();
 
     res.json({ message: `Post ${post.status}`, status: post.status });
-  } catch (error) {
-    console.error(error);
+  } catch (err) {
+    console.error(err);
     res.status(500).json({ message: "Error toggling post status" });
   }
 };
 
 module.exports = {
+  createPost,
+  updatePost,
   getPosts,
   getPostById,
   getMyPosts,
-  createPost,
-  updatePost,
   deletePost,
   togglePublishPosts,
 };
