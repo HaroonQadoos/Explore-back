@@ -34,12 +34,7 @@ app.use(
     credentials: true, // allow cookies
   })
 );
-// app.use((req, res, next) => {
-//   if (!isConnected) {
-//     connectDB();
-//   }
-//   next();
-// });
+
 app.use(express.json());
 app.use(cookieParser());
 

@@ -146,7 +146,7 @@ const getPostById = async (req, res) => {
   try {
     const post = await Post.findOne({ _id: id, status: "published" }).populate(
       "author",
-      "username _id"
+      "username"
     );
     if (!post) return res.status(404).json({ message: "Post not found" });
     res.json(post);
