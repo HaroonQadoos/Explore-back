@@ -29,7 +29,7 @@ app.use(
   cors({
     origin: [
       "https://explore-front-aznp.vercel.app",
-      "https://explore-dash-a3tm.vercel.app",
+      "https://explore-dash-uuqd2.vercel.app",
     ], // frontend origin
     credentials: true, // allow cookies
   })
